@@ -20,8 +20,6 @@ pub enum WalletError {
     // Crypto Errors
     #[error("padding error")]
     PadError,
-    #[error("unpadding error")]
-    UnpadError,
     #[error("bip32 error")]
     Bip32Error,
     #[error("bip39 error")]
@@ -58,7 +56,7 @@ macro_rules! impl_from_map {
 
 impl_from_map! {
     PadError             <= cipher::inout::PadError,
-    UnpadError           <= cipher::inout::block_padding::UnpadError,
+    WrongPin             <= cipher::inout::block_padding::UnpadError,
     Bip32Error           <= bip32::Error,
     PBKDF2InvalidLength  <= digest::InvalidLength,
     Bip39Error           <= bip39::Error,

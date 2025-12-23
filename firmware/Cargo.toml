@@ -9,23 +9,77 @@ name = "wall-e-firmware"
 path = "./src/bin/main.rs"
 
 [dependencies]
-esp-hal = { version = "1.0.0", features = ["esp32c3", "log-04"] }
-
+# esp dependency
+esp-hal = { version = "1.0.0", features = ["esp32c3", "log-04", "unstable"] }
 
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32c3", "log-04"] }
 log = "0.4.27"
 
-critical-section = "1.2.0"
+# critical-section = "1.2.0"
 esp-alloc = "0.9.0"
 esp-println = { version = "0.16.1", features = ["esp32c3", "log-04"] }
 
+# shared library
 common = { package = "wall-e-common", path = "../common" }
 
+# storage
+esp-storage = { version = "0.8.0", features = ["esp32c3"] }
+embedded-storage = "0.3.1"
+heapless = { version = "0.9.2", features = ["serde"] }
+
+# transport layer
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_bytes = { version = "0.11", default-features = false }
+postcard = { version = "1.0", default-features = false }
+cobs = { version = "0.5", default-features = false }
+
+# crypto dependencies
+bip32 = { version = "0.5.3", default-features = false, features = [
+    # this causes `once_cell` std error
+    # "mnemonic",
+    # "bip39",
+    "secp256k1",
+    "alloc",
+] }
+bip39 = { version = "2.2.2", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false }
+aes = { version = "0.8", default-features = false }
+cbc = { version = "0.1", default-features = false }
+cipher = { version = "0.4", default-features = false, features = [
+    "block-padding",
+    "alloc",
+] }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+# can't update because of the bytes library requires unsupported atomic behavior
+rlp = { version = "0.4", default-features = false }
+# alloy-rlp = { version = "0.3", default-features = false, features = ["derive"] }
+k256 = { version = "0.13", default-features = false, features = [
+    "ecdsa",
+    "arithmetic",
+] }
+
+# utilities
+itertools = { version = "0.14", default-features = false, features = [
+    "use_alloc",
+] }
+derive_more = { version = "2", default-features = false, features = ["from"] }
+qrcode = { git = "https://github.com/kennytm/qrcode-rust.git", default-features = false }
+
+# display
+mipidsi = "0.9"
+embedded-graphics = "0.8"
+embedded-hal-bus = "0.3"
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread

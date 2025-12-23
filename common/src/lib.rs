@@ -2,43 +2,80 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
+use heapless::{String as HString, format};
 use serde::{Deserialize, Serialize};
 
+use crate::error::{TransportError, WalletError};
+
+pub mod error;
+
 /// The maximum buffer size (in bytes) for a single message.
-pub const MAX_MESSAGE_SIZE: usize = 4096;
+pub const MAX_MESSAGE_SIZE: usize = 1024;
+
+/// The number of mnemonic words (256 bits)
+pub const MNEMONIC_SEQ_LEN: usize = 24;
+
+// The max length of mnemonic word
+pub const MNEMONIC_MAX_WORD_LEN: usize = 8;
+
+/// The length of PIN (6 digits)
+pub const PIN_LEN: usize = 6;
+
+/// The length of address length (20 bytes for ETH)
+pub const ADDR_LEN: usize = 20;
+
+/// The length of address length (in string, with `0x`)
+pub const ADDR_STR_LEN: usize = ADDR_LEN * 2 + 2;
+
+/// The length of signature
+pub const SIGNATURE_LEN: usize = 132;
+
+pub const MAX_WRONG_PIN_COUNT: u8 = 10;
 
 /// Commands from the CLI app
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
-    /// Check if connected
+    /// Check if connected, expect Pong
     Ping,
-    /// Unlock wallet through PIN (6 digits)
-    /// TODO: this is not safe, should move PIN input to wallet
-    Unlock { pin: String },
-    /// Get wallet status
-    FetchStatus,
-    /// Initialize wallet
+    /// Get wallet status, expect Status
+    GetStatus,
+    /// Initialize wallet, expect RequireSetPin
     Initialize,
-    /// Wipe wallet clean
-    Wipe,
-    /// Restore wallet from the mnemonic sentence
-    Restore { mnemonic: String },
-    /// Sign transaction
-    Sign { tx: Vec<u8> },
-    /// Receive by showing public key
+    /// Unlock wallet through PIN (ASCII encoded), expect Done
+    /// TODO: this is not safe, should move PIN input to wallet
+    Unlock { pin: [u8; PIN_LEN] },
+    /// Set PIN, expect Done
+    /// TODO: this is not safe, should move PIN input to wallet
+    SetPin { pin: [u8; PIN_LEN] },
+    /// Sign transaction, expect Signature
+    Sign { tx: TxFields },
+    /// Receive by showing public key, expect Address
     Receive,
+    /// Wipe wallet clean, expect Done
+    Wipe,
+    /// Restore wallet from the mnemonic sentence, expect RequireSetPin
+    /// TODO: this is not safe, should move mnemonic input to wallet
+    Restore {
+        mnemonic: [HString<MNEMONIC_MAX_WORD_LEN>; MNEMONIC_SEQ_LEN],
+    },
 }
 
 /// Status of wallet
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub enum Status {
-    /// Empty wallet
-    Uninitialized,
-    /// Locked wallet
+pub enum WalletStatus {
+    /// No wallet
+    Empty,
+    /// Locked wallet, require PIN
     Locked,
-    /// Unlocked wallet
-    Unlocked,
+    /// Unlocked wallet, ready for commands
+    Ready,
+    /// Confirming mnemonic
+    MnemonicConfirming { idx: usize },
+    /// Confirming transaction
+    TxConfirming,
+    /// Waiting to set PIN
+    PinSetting,
 }
 
 /// Response from the wallet
@@ -46,12 +83,65 @@ pub enum Status {
 pub enum Response {
     /// Connected
     Pong,
-    /// Acknowledge signal
-    Ack,
+    /// Reject command
+    Rejected,
+    /// Confirming
+    Confirming,
+    /// Require setting PIN
+    RequireSetPin,
+    /// Command done
+    Done,
     /// Reply wallet status
-    Status(Status),
+    Status(WalletStatus),
     /// Transaction signature
-    Signature(Vec<u8>),
+    Signature(HString<SIGNATURE_LEN>),
     /// Address for receiving
-    Address(String),
+    Address(HString<ADDR_STR_LEN>),
+    /// Error
+    Error(WalletError),
+}
+
+/// The fields required for an EIP-1559 Transaction
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TxFields {
+    pub chain_id: u64,
+    pub nonce: u64,
+    pub max_priority_fee: u64,
+    pub max_fee: u64,
+    pub gas_limit: u64,
+    pub to: [u8; ADDR_LEN], // Ethereum Address
+    pub value: u128,        // Amount in Wei
+    pub data: Vec<u8>,      // Call data (empty for simple transfers)
+}
+
+/// The components of an ECDSA Signature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Signature {
+    pub r: [u8; 32],
+    pub s: [u8; 32],
+    pub v: u8, // y_parity (0 or 1 for EIP-1559)
+}
+
+impl Into<HString<SIGNATURE_LEN>> for Signature {
+    fn into(self) -> HString<SIGNATURE_LEN> {
+        // There shall be no error here
+        format!(SIGNATURE_LEN; "0x{}{}{:#x}", hex::encode(self.r), hex::encode(self.s), self.v)
+            .unwrap()
+    }
+}
+
+/// The interface between the Wallet Logic and the Outside World
+pub trait Transport<S, R> {
+    /// Checks if a new reply has arrived from the Host.
+    ///
+    /// Returns:
+    /// - Ok(Some(R)): A complete reply is ready to process.
+    /// - Ok(None): No reply currently available (buffer empty/incomplete).
+    /// - Err(e): Something went wrong with the connection.
+    fn poll(&mut self) -> Result<Option<R>, TransportError>;
+
+    /// Sends a message back to the Host.
+    ///
+    /// This should block until the message is sent (or put into the TX buffer).
+    fn send(&mut self, message: S) -> Result<(), TransportError>;
 }

@@ -1,11 +1,21 @@
 use common::error::WalletError;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_storage::FlashStorage;
-
-use crate::wallet::{FLASH_MAGIC, FlashData};
+use serde::{Deserialize, Serialize};
 
 // The NVS partition usually starts here. Check your partitions.csv if unsure.
 const STORAGE_OFFSET: u32 = 0x9000;
+
+pub const FLASH_MAGIC: u32 = 0xDEADBEEF;
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlashData {
+    pub magic: u32, // 0xDEADBEEF
+    pub salt: [u8; 16],
+    pub iv: [u8; 16],
+    #[serde(with = "serde_bytes")]
+    pub enc_entropy: [u8; 48], // 4 magic + 32 entropy + 12 padding
+}
 
 pub struct WalletStorage<'s> {
     flash_storage: FlashStorage<'s>,

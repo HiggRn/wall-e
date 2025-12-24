@@ -6,9 +6,7 @@ use aes::Aes256;
 use bip32::{DerivationPath, XPrv, secp256k1::elliptic_curve::zeroize::Zeroize};
 use bip39::{Language, Mnemonic};
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
-use common::{
-    Command, PIN_LEN, Response, Signature, Transport, TxFields, WalletStatus, error::WalletError,
-};
+use common::{PIN_LEN, Response, Signature, TxFields, WalletStatus, error::WalletError};
 
 use esp_hal::rng::Trng;
 
@@ -20,11 +18,13 @@ use k256::ecdsa::SigningKey;
 
 use qrcode::QrCode;
 use rlp::RlpStream;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use sha3::Keccak256;
 
-use crate::{display, storage::WalletStorage};
+use crate::{
+    display,
+    storage::{FLASH_MAGIC, FlashData, WalletStorage},
+};
 
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
@@ -33,38 +33,22 @@ const KEK_ROUNDS: u32 = 10_000;
 
 const MAGIC: &[u8; 4] = b"WALL";
 
-pub const FLASH_MAGIC: u32 = 0xDEADBEEF;
-
 const ENTROPY_SIZE: usize = 32;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct FlashData {
-    pub magic: u32, // 0xDEADBEEF
-    pub salt: [u8; 16],
-    pub iv: [u8; 16],
-    #[serde(with = "serde_bytes")]
-    pub enc_entropy: [u8; 48], // 4 magic + 32 entropy + 12 padding
+pub fn ping() -> Response {
+    Response::Pong
 }
 
-pub fn ping(transport: &mut dyn Transport<Response, Command>) -> Result<(), WalletError> {
-    Ok(transport.send(Response::Pong)?)
-}
-
-pub fn get_status(
-    transport: &mut dyn Transport<Response, Command>,
-    status: &mut WalletStatus,
-) -> Result<(), WalletError> {
-    Ok(transport.send(Response::Status(*status))?)
+pub fn get_status(status: &WalletStatus) -> Response {
+    Response::Status(*status)
 }
 
 pub fn initialize(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     rng: &mut Trng,
-) -> Result<Option<([u8; ENTROPY_SIZE], Mnemonic)>, WalletError> {
+) -> Result<(Response, Option<([u8; ENTROPY_SIZE], Mnemonic)>), WalletError> {
     if *status != WalletStatus::Empty {
-        transport.send(Response::Rejected)?;
-        return Ok(None);
+        return Ok((Response::Rejected, None));
     }
 
     // generate entropy
@@ -74,29 +58,24 @@ pub fn initialize(
     // convert to mnemonic words
     let mnemonic = Mnemonic::from_entropy(&entropy)?;
 
-    // send reponse
-    transport.send(Response::Confirming)?;
-
     *status = WalletStatus::MnemonicConfirming { idx: 0 };
 
-    Ok(Some((entropy, mnemonic)))
+    Ok((Response::Confirming, Some((entropy, mnemonic))))
 }
 
 pub fn unlock(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     flash_data: &Option<FlashData>,
     pin: &mut [u8],
 ) -> Result<
     (
-        Option<[u8; bip32::KEY_SIZE]>,
-        Option<[u8; bip32::KEY_SIZE + 1]>,
+        Response,
+        Option<([u8; bip32::KEY_SIZE], [u8; bip32::KEY_SIZE + 1])>,
     ),
     WalletError,
 > {
     if *status != WalletStatus::Locked {
-        transport.send(Response::Rejected)?;
-        return Ok((None, None));
+        return Ok((Response::Rejected, None));
     }
 
     let Some(flash_data) = flash_data else {
@@ -148,23 +127,20 @@ pub fn unlock(
     let secret_key = xprv.to_bytes();
     let public_key = xprv.public_key().to_bytes();
 
-    transport.send(Response::Done)?;
-
     *status = WalletStatus::Ready;
 
-    Ok((Some(secret_key), Some(public_key)))
+    Ok((Response::Done, Some((secret_key, public_key))))
 }
 
 pub fn set_pin(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     rng: &mut Trng,
     storage: &mut WalletStorage,
     pin: &mut [u8; PIN_LEN],
     entropy: &mut [u8; ENTROPY_SIZE],
-) -> Result<(), WalletError> {
+) -> Result<Response, WalletError> {
     if *status != WalletStatus::PinSetting {
-        return Ok(transport.send(Response::Rejected)?);
+        return Ok(Response::Rejected);
     }
 
     // generate salt
@@ -203,21 +179,18 @@ pub fn set_pin(
     };
     storage.save(&flash_data)?;
 
-    transport.send(Response::Done)?;
-
     *status = WalletStatus::Locked;
 
-    Ok(())
+    Ok(Response::Done)
 }
 
 pub fn sign(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     secret_key: &Option<[u8; bip32::KEY_SIZE]>,
     tx: &TxFields,
-) -> Result<(), WalletError> {
+) -> Result<Response, WalletError> {
     if *status != WalletStatus::TxConfirming {
-        return Ok(transport.send(Response::Rejected)?);
+        return Ok(Response::Rejected);
     }
 
     let Some(sk) = secret_key else {
@@ -264,21 +237,18 @@ pub fn sign(
         s,
         v: recid.to_byte(),
     };
-    transport.send(Response::Signature(signature.into()))?;
 
     *status = WalletStatus::Ready;
 
-    Ok(())
+    Ok(Response::Signature(signature.into()))
 }
 
 pub fn receive(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     public_key: &Option<[u8; bip32::KEY_SIZE + 1]>,
-) -> Result<Option<QrCode>, WalletError> {
+) -> Result<(Response, Option<QrCode>), WalletError> {
     if *status != WalletStatus::Ready {
-        transport.send(Response::Rejected)?;
-        return Ok(None);
+        return Ok((Response::Rejected, None));
     }
 
     let Some(pk) = public_key else {
@@ -291,9 +261,7 @@ pub fn receive(
     let h: [u8; 32] = hasher.finalize().into();
 
     // convert to checksum address string
-    let addr = display::format_address(&h[12..])?;
-
-    transport.send(Response::Address(addr.clone()))?;
+    let addr = display::format_address(&h[12..]);
 
     // display addr also as QR code
     let mut uri = HString::<64>::new();
@@ -302,18 +270,17 @@ pub fn receive(
 
     *status = WalletStatus::Ready;
 
-    Ok(Some(qrcode))
+    Ok((Response::Address(HString::from_str(&addr)?), Some(qrcode)))
 }
 
 pub fn wipe(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     storage: &mut WalletStorage,
     secret_key: &mut Option<[u8; bip32::KEY_SIZE]>,
     public_key: &mut Option<[u8; bip32::KEY_SIZE + 1]>,
-) -> Result<(), WalletError> {
+) -> Result<Response, WalletError> {
     if *status != WalletStatus::Ready {
-        return Ok(transport.send(Response::Rejected)?);
+        return Ok(Response::Rejected);
     }
 
     // wipe storage
@@ -329,21 +296,17 @@ pub fn wipe(
         *public_key = None;
     }
 
-    transport.send(Response::Done)?;
-
     *status = WalletStatus::Empty;
 
-    Ok(())
+    Ok(Response::Done)
 }
 
 pub fn restore(
-    transport: &mut dyn Transport<Response, Command>,
     status: &mut WalletStatus,
     phrase: &String,
-) -> Result<Option<[u8; ENTROPY_SIZE]>, WalletError> {
+) -> Result<(Response, Option<[u8; ENTROPY_SIZE]>), WalletError> {
     if *status != WalletStatus::Empty {
-        transport.send(Response::Rejected)?;
-        return Ok(None);
+        return Ok((Response::Rejected, None));
     }
 
     // restore entropy
@@ -358,9 +321,7 @@ pub fn restore(
     entropy.copy_from_slice(&ent[..ENTROPY_SIZE]);
 
     // ask for PIN setting
-    transport.send(Response::RequireSetPin)?;
-
     *status = WalletStatus::PinSetting;
 
-    Ok(Some(entropy))
+    Ok((Response::RequireSetPin, Some(entropy)))
 }

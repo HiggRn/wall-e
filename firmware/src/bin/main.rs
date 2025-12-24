@@ -136,64 +136,63 @@ fn main() -> ! {
 
         // delegate command
         let result = match command {
-            Command::Ping => wallet::ping(&mut transport),
-            Command::GetStatus => wallet::get_status(&mut transport, &mut status),
+            Command::Ping => Ok(wallet::ping()),
+            Command::GetStatus => Ok(wallet::get_status(&status)),
             Command::Initialize => {
-                wallet::initialize(&mut transport, &mut status, &mut rng).map(|out| {
+                wallet::initialize(&mut status, &mut rng).map(|(response, out)| {
                     if let Some((ent, mne)) = out {
                         entropy.copy_from_slice(&ent);
                         mnemonic_confirming = Some(mne);
                     }
+                    response
                 })
             }
             Command::Unlock { mut pin } => {
-                wallet::unlock(&mut transport, &mut status, &flash_data, &mut pin).map(
-                    |(sk, pk)| {
-                        secret_key = sk;
-                        public_key = pk;
-                    },
-                )
+                wallet::unlock(&mut status, &flash_data, &mut pin).map(|(response, keys)| {
+                    if let Some((sk, pk)) = keys {
+                        secret_key = Some(sk);
+                        public_key = Some(pk);
+                    }
+                    response
+                })
             }
-            Command::SetPin { mut pin } => wallet::set_pin(
-                &mut transport,
-                &mut status,
-                &mut rng,
-                &mut storage,
-                &mut pin,
-                &mut entropy,
-            ),
+            Command::SetPin { mut pin } => {
+                wallet::set_pin(&mut status, &mut rng, &mut storage, &mut pin, &mut entropy)
+            }
             Command::Sign { tx } => {
                 tx_confirming = Some(tx);
                 status = WalletStatus::TxConfirming;
-                transport.send(Response::Confirming).map_err(|e| e.into())
+                Ok(Response::Confirming)
             }
-            Command::Receive => wallet::receive(&mut transport, &mut status, &public_key)
-                .map(|qr| current_displayed = qr.map(|qr| qr.into())),
-            Command::Wipe => wallet::wipe(
-                &mut transport,
-                &mut status,
-                &mut storage,
-                &mut secret_key,
-                &mut public_key,
-            ),
+            Command::Receive => wallet::receive(&mut status, &public_key).map(|(response, qr)| {
+                current_displayed = qr.map(|qr| qr.into());
+                response
+            }),
+            Command::Wipe => {
+                wallet::wipe(&mut status, &mut storage, &mut secret_key, &mut public_key)
+            }
             Command::Restore { mnemonic } => {
                 let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
-                wallet::restore(&mut transport, &mut status, &phrase).map(|ent| {
+                wallet::restore(&mut status, &phrase).map(|(response, ent)| {
                     if let Some(ent) = ent {
                         entropy.copy_from_slice(&ent);
                     }
+                    response
                 })
             }
         };
 
-        // TODO: This is a pretty bad way to deal with the errors.
-        if let Err(err) = result {
-            if err == WalletError::WrongPin {
+        // send back results
+        let e = match result {
+            Ok(response) => transport.send(response),
+            Err(WalletError::WrongPin) => {
                 wrong_pin_count += 1;
+                transport.send(Response::Error(WalletError::WrongPin))
             }
-            if let Err(transport_err) = transport.send(Response::Error(err)) {
-                error!("{transport_err}");
-            }
+            Err(err) => transport.send(Response::Error(err)),
+        };
+        if let Err(transport_err) = e {
+            error!("{transport_err}");
         }
 
         // wipe wallet if wrong PIN too many times
@@ -272,12 +271,14 @@ fn main() -> ! {
                         // stop display
                         current_displayed = None;
                         // sign
-                        wallet::sign(
-                            &mut transport,
+                        match wallet::sign(
                             &mut status,
                             &secret_key,
                             tx_confirming.as_ref().unwrap(),
-                        )
+                        ) {
+                            Ok(response) => transport.send(response).map_err(|e| e.into()),
+                            Err(e) => Err(e),
+                        }
                     } else {
                         Ok(())
                     }
@@ -296,9 +297,7 @@ fn main() -> ! {
         // display current_displayed
         if let Some(ref current_displayed) = current_displayed {
             if let Err(err) = current_displayed.display(&mut display) {
-                if let Err(transport_err) = transport.send(Response::Error(err)) {
-                    error!("{transport_err}");
-                }
+                error!("{err:?}");
             }
         }
     }

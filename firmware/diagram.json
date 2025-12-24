@@ -1,0 +1,104 @@
+{
+    "version": 1,
+    "author": "zgu",
+    "editor": "wokwi",
+    "parts": [
+        {
+            "type": "board-esp32-c3-devkitm-1",
+            "id": "esp",
+            "top": 0,
+            "left": 0,
+            "attrs": {}
+        },
+        {
+            "type": "chip-st7735",
+            "id": "lcd",
+            "top": -60,
+            "left": 200,
+            "attrs": {
+                "rows": "160",
+                "cols": "80"
+            }
+        },
+        {
+            "type": "wokwi-led",
+            "id": "led1",
+            "top": 0,
+            "left": 0,
+            "attrs": {
+                "color": "green"
+            }
+        }
+    ],
+    "connections": [
+        [
+            "esp:TX",
+            "$serialMonitor:RX",
+            "",
+            []
+        ],
+        [
+            "esp:RX",
+            "$serialMonitor:TX",
+            "",
+            []
+        ],
+        [
+            "lcd:GND",
+            "esp:GND.1",
+            "black",
+            []
+        ],
+        [
+            "lcd:VCC",
+            "esp:3V3.1",
+            "red",
+            []
+        ],
+        [
+            "lcd:SCK",
+            "esp:2",
+            "green",
+            []
+        ],
+        [
+            "lcd:MOSI",
+            "esp:3",
+            "blue",
+            []
+        ],
+        [
+            "lcd:CS",
+            "esp:7",
+            "yellow",
+            []
+        ],
+        [
+            "lcd:DC",
+            "esp:6",
+            "orange",
+            []
+        ],
+        [
+            "lcd:RST",
+            "esp:10",
+            "white",
+            []
+        ],
+        [
+            "esp:1",
+            "led1:A",
+            "green",
+            []
+        ],
+        [
+            "esp:GND.1",
+            "led1:C",
+            "black",
+            []
+        ]
+    ],
+    "dependencies": {
+        "chip-st7735": "github:martysweet/st7735-wokwi-chip@1.0.1"
+    }
+}

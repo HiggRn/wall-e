@@ -269,9 +269,17 @@ impl App {
 
         for p in ports {
             // filter for Espressif VID (0x303A)
-            let SerialPortType::UsbPort(UsbPortInfo { vid: 0x303A, .. }) = p.port_type else {
+            let is_real_hardware = matches!(
+                p.port_type,
+                SerialPortType::UsbPort(UsbPortInfo { vid: 0x303A, .. })
+            );
+
+            // or simulation
+            let is_simulation = p.port_name == "COM9" || p.port_name == "/dev/ttyS0";
+
+            if !is_real_hardware && !is_simulation {
                 continue;
-            };
+            }
 
             // try to open the port, 115200 baud
             let port_builder =

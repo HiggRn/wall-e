@@ -18,9 +18,10 @@ use esp_hal::{
     rng::{Trng, TrngSource},
     spi::{
         Mode,
-        master::{Config, Spi},
+        master::{Config as SpiConfig, Spi},
     },
     time::{Duration, Instant, Rate},
+    uart::{Config as UartConfig, Uart},
     usb_serial_jtag::UsbSerialJtag,
 };
 
@@ -36,7 +37,8 @@ use wall_e_firmware::{
 };
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    esp_println::println!("{info}");
     loop {}
 }
 
@@ -63,7 +65,11 @@ fn main() -> ! {
     let mut was_pressed = false;
 
     // set up transport
-    let serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
+    // let serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
+    let serial = Uart::new(peripherals.UART0, UartConfig::default())
+        .unwrap()
+        .with_rx(peripherals.GPIO20)
+        .with_tx(peripherals.GPIO21);
     let mut transport = SerialTransport::new(serial);
 
     // set up wallet
@@ -77,24 +83,24 @@ fn main() -> ! {
 
     // set up display
     let mut delay = Delay::new();
-    let cs = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
-    let dc = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
-    let rst = Output::new(peripherals.GPIO8, Level::High, OutputConfig::default());
+    let cs = Output::new(peripherals.GPIO7, Level::High, OutputConfig::default());
+    let dc = Output::new(peripherals.GPIO6, Level::Low, OutputConfig::default());
+    let rst = Output::new(peripherals.GPIO10, Level::High, OutputConfig::default());
     let spi = Spi::new(
         peripherals.SPI2,
-        Config::default()
+        SpiConfig::default()
             .with_mode(Mode::_0)
             .with_frequency(Rate::from_mhz(30)),
     )
     .unwrap()
-    .with_sck(peripherals.GPIO6)
-    .with_mosi(peripherals.GPIO7)
-    .with_miso(peripherals.GPIO2);
+    .with_sck(peripherals.GPIO2)
+    .with_mosi(peripherals.GPIO3);
     let spi_device = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
     let mut spi_buffer = [0u8; 512];
 
     let di = SpiInterface::new(spi_device, dc, &mut spi_buffer);
     let mut display = Builder::new(ST7735s, di)
+        .display_size(80, 160)
         .reset_pin(rst)
         .init(&mut delay)
         .unwrap();
@@ -102,13 +108,17 @@ fn main() -> ! {
     // wallet wrong pin count
     let mut wrong_pin_count = 0;
 
+    // turn LED green to show everything is fine
+    let mut led = Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default());
+    led.set_high();
+
     loop {
         // get command
         let command = match transport.poll() {
             Ok(Some(command)) => command,
             Ok(None) => continue,
             Err(err) => {
-                error!("{err}");
+                esp_println::println!("{err}");
                 continue;
             }
         };
@@ -157,7 +167,7 @@ fn main() -> ! {
             Err(err) => transport.send(Response::Error(err)),
         };
         if let Err(transport_err) = e {
-            error!("{transport_err}");
+            esp_println::println!("{transport_err}");
         }
 
         // wipe wallet if wrong PIN too many times
@@ -238,14 +248,14 @@ fn main() -> ! {
         // TODO: This is still a pretty bad way to deal with the error
         if let Err(err) = result {
             if let Err(transport_err) = transport.send(Response::Error(err)) {
-                error!("{transport_err}");
+                esp_println::println!("{transport_err}");
             }
         }
 
         // display current_displayed
         if let Some(ref current_displayed) = wallet.current_displayed {
             if let Err(err) = current_displayed.display(&mut display) {
-                error!("{err:?}");
+                esp_println::println!("{err:?}");
             }
         }
     }

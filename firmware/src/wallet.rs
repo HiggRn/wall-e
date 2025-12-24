@@ -61,12 +61,7 @@ pub struct Wallet<'a> {
 
 impl<'a> Wallet<'a> {
     pub fn new(mut storage: WalletStorage<'a>) -> Self {
-        let flash_data = match storage.load() {
-            Ok(flash) => flash,
-            Err(err) => panic!("load error: {err}"),
-        };
-
-        let status = if flash_data.is_some() {
+        let status = if matches!(storage.load(), Ok(Some(_))) {
             WalletStatus::Locked
         } else {
             WalletStatus::Empty

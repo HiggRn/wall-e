@@ -6,7 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{format, string::ToString};
 
 use common::{Command, MAX_WRONG_PIN_COUNT, Response, Transport, WalletStatus, error::WalletError};
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -26,12 +26,13 @@ use esp_hal::{
 
 use esp_storage::FlashStorage;
 use itertools::Itertools;
-use k256::elliptic_curve::zeroize::Zeroize;
 use log::error;
 
 use mipidsi::{Builder, interface::SpiInterface, models::ST7735s};
 use wall_e_firmware::{
-    display::DisplayedObject, storage::WalletStorage, transport::SerialTransport, wallet,
+    storage::WalletStorage,
+    transport::SerialTransport,
+    wallet::{Wallet, WalletSession},
 };
 
 #[panic_handler]
@@ -65,28 +66,14 @@ fn main() -> ! {
     let serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
     let mut transport = SerialTransport::new(serial);
 
-    // set up storage
+    // set up wallet
     let flash_storage = FlashStorage::new(peripherals.FLASH);
-    let mut storage = WalletStorage::new(flash_storage);
-
-    // set up status, Empty if storage didn't detect anything, else Locked
-    let flash_data = match storage.load() {
-        Ok(flash) => flash,
-        Err(err) => panic!("load error: {err}"),
-    };
-    let mut status = if flash_data.is_some() {
-        WalletStatus::Locked
-    } else {
-        WalletStatus::Empty
-    };
+    let storage = WalletStorage::new(flash_storage);
+    let mut wallet = Wallet::new(storage);
 
     // set up Trng
     let _rng_source = TrngSource::new(peripherals.RNG, peripherals.ADC1); // no need to reborrow since we need it through out the cycle
     let mut rng = Trng::try_new().unwrap(); // Unwrap is safe as we have enabled TrngSource.
-
-    // RAM-stored secret key and public key
-    let mut secret_key = None;
-    let mut public_key = None;
 
     // set up display
     let mut delay = Delay::new();
@@ -115,14 +102,6 @@ fn main() -> ! {
     // wallet wrong pin count
     let mut wrong_pin_count = 0;
 
-    // temp storage for entropy, mnemonic, tx, qrcode
-    let mut entropy = [0u8; 32];
-    let mut mnemonic_confirming = None;
-    let mut words: Option<Vec<_>> = None;
-    let mut tx_confirming = None;
-    let mut tx_confirm_start = None;
-    let mut current_displayed: Option<DisplayedObject> = None;
-
     loop {
         // get command
         let command = match transport.poll() {
@@ -136,49 +115,35 @@ fn main() -> ! {
 
         // delegate command
         let result = match command {
-            Command::Ping => Ok(wallet::ping()),
-            Command::GetStatus => Ok(wallet::get_status(&status)),
-            Command::Initialize => {
-                wallet::initialize(&mut status, &mut rng).map(|(response, out)| {
-                    if let Some((ent, mne)) = out {
-                        entropy.copy_from_slice(&ent);
-                        mnemonic_confirming = Some(mne);
-                    }
-                    response
-                })
-            }
-            Command::Unlock { mut pin } => {
-                wallet::unlock(&mut status, &flash_data, &mut pin).map(|(response, keys)| {
-                    if let Some((sk, pk)) = keys {
-                        secret_key = Some(sk);
-                        public_key = Some(pk);
-                    }
-                    response
-                })
-            }
-            Command::SetPin { mut pin } => {
-                wallet::set_pin(&mut status, &mut rng, &mut storage, &mut pin, &mut entropy)
-            }
+            Command::Ping => Ok(wallet.ping()),
+            Command::GetStatus => Ok(wallet.get_status()),
+            Command::Initialize => wallet.initialize(&mut rng),
+            Command::Unlock { mut pin } => wallet.unlock(&mut pin),
+            Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin),
             Command::Sign { tx } => {
-                tx_confirming = Some(tx);
-                status = WalletStatus::TxConfirming;
-                Ok(Response::Confirming)
+                if let Some(WalletSession::Operating {
+                    ref key_pair,
+                    tx_context: None,
+                }) = wallet.session
+                {
+                    // display tx_confirming
+                    wallet.current_displayed = Some(tx.clone().into());
+                    // set timer
+                    wallet.session = Some(WalletSession::Operating {
+                        key_pair: key_pair.clone(),
+                        tx_context: Some((tx, Instant::now())),
+                    });
+                    wallet.status = WalletStatus::TxConfirming;
+                    Ok(Response::Confirming)
+                } else {
+                    Err(WalletError::SessionError)
+                }
             }
-            Command::Receive => wallet::receive(&mut status, &public_key).map(|(response, qr)| {
-                current_displayed = qr.map(|qr| qr.into());
-                response
-            }),
-            Command::Wipe => {
-                wallet::wipe(&mut status, &mut storage, &mut secret_key, &mut public_key)
-            }
+            Command::Receive => wallet.receive(),
+            Command::Wipe => wallet.wipe(),
             Command::Restore { mnemonic } => {
                 let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
-                wallet::restore(&mut status, &phrase).map(|(response, ent)| {
-                    if let Some(ent) = ent {
-                        entropy.copy_from_slice(&ent);
-                    }
-                    response
-                })
+                wallet.restore(&phrase)
             }
         };
 
@@ -198,21 +163,7 @@ fn main() -> ! {
         // wipe wallet if wrong PIN too many times
         if wrong_pin_count >= MAX_WRONG_PIN_COUNT {
             wrong_pin_count = 0;
-
-            // wipe storage
-            storage.wipe().unwrap();
-
-            // wipe key
-            if let Some(ref mut sk) = secret_key {
-                sk.zeroize();
-                secret_key = None;
-            }
-            if let Some(ref mut pk) = public_key {
-                pk.zeroize();
-                public_key = None;
-            }
-
-            status = WalletStatus::Empty;
+            let _ = wallet.wipe().unwrap();
             continue;
         }
 
@@ -221,25 +172,26 @@ fn main() -> ! {
         let is_pressed = is_low && !was_pressed;
         was_pressed = is_low;
 
-        // set iterator if we have a mnemonic to confirm
-        if words.is_none() && mnemonic_confirming.is_some() {
-            words = Some(mnemonic_confirming.as_ref().unwrap().words().collect());
-        }
-
         // display if in particular state
-        let result = match status {
-            WalletStatus::MnemonicConfirming { ref mut idx } => {
-                if *idx == words.as_ref().unwrap().len() {
+        let result = match (wallet.status, &mut wallet.session) {
+            (
+                WalletStatus::MnemonicConfirming { ref mut idx },
+                Some(WalletSession::Seeding {
+                    entropy: _,
+                    mnemonic: Some(words),
+                }),
+            ) => {
+                if *idx == words.len() {
                     // stop display
-                    current_displayed = None;
-                    status = WalletStatus::PinSetting;
+                    wallet.current_displayed = None;
+                    wallet.status = WalletStatus::PinSetting;
                     transport
                         .send(Response::RequireSetPin)
                         .map_err(|e| e.into())
                 } else if is_pressed {
                     // display another word
-                    current_displayed =
-                        Some(format!("{}: {}", *idx + 1, words.as_ref().unwrap()[*idx]).into());
+                    wallet.current_displayed =
+                        Some(format!("{}: {}", *idx + 1, words[*idx]).into());
                     *idx += 1;
 
                     Ok(())
@@ -247,43 +199,39 @@ fn main() -> ! {
                     Ok(())
                 }
             }
-            WalletStatus::TxConfirming => match tx_confirm_start {
-                None => {
-                    // set timer
-                    tx_confirm_start = Some(Instant::now());
-                    // display tx_confirming
-                    current_displayed = tx_confirming.clone().map(|tx| tx.into());
+            (
+                WalletStatus::TxConfirming,
+                Some(WalletSession::Operating {
+                    key_pair,
+                    tx_context: Some((_, timer)),
+                }),
+            ) => {
+                if timer.elapsed() > Duration::from_secs(60) {
+                    // time out, treated as cancel
+                    // stop display
+                    wallet.current_displayed = None;
+                    // cancel
+                    wallet.status = WalletStatus::Ready;
+                    // reset session
+                    wallet.session = Some(WalletSession::Operating {
+                        key_pair: key_pair.clone(),
+                        tx_context: None,
+                    });
+                    transport.send(Response::Rejected).map_err(|e| e.into())
+                } else if is_pressed {
+                    // button pressed, user confirmed
+                    // stop display
+                    wallet.current_displayed = None;
+                    // sign
+                    match wallet.sign() {
+                        Ok(response) => transport.send(response).map_err(|e| e.into()),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    // waiting
                     Ok(())
                 }
-                Some(s) => {
-                    // time out, treated as cancel
-                    if s.elapsed() > Duration::from_secs(60) {
-                        // reset timer
-                        tx_confirm_start = None;
-                        // stop display
-                        current_displayed = None;
-                        // cancel
-                        status = WalletStatus::Ready;
-                        transport.send(Response::Rejected).map_err(|e| e.into())
-                    } else if is_pressed {
-                        // reset timer
-                        tx_confirm_start = None;
-                        // stop display
-                        current_displayed = None;
-                        // sign
-                        match wallet::sign(
-                            &mut status,
-                            &secret_key,
-                            tx_confirming.as_ref().unwrap(),
-                        ) {
-                            Ok(response) => transport.send(response).map_err(|e| e.into()),
-                            Err(e) => Err(e),
-                        }
-                    } else {
-                        Ok(())
-                    }
-                }
-            },
+            }
             _ => Ok(()),
         };
 
@@ -295,7 +243,7 @@ fn main() -> ! {
         }
 
         // display current_displayed
-        if let Some(ref current_displayed) = current_displayed {
+        if let Some(ref current_displayed) = wallet.current_displayed {
             if let Err(err) = current_displayed.display(&mut display) {
                 error!("{err:?}");
             }

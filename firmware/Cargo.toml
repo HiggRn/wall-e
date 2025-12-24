@@ -60,6 +60,7 @@ k256 = { version = "0.13", default-features = false, features = [
     "ecdsa",
     "arithmetic",
 ] }
+zeroize = { version = "1.8", features = ["derive"] }
 
 # utilities
 itertools = { version = "0.14", default-features = false, features = [

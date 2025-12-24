@@ -14,8 +14,8 @@ pub enum WalletError {
     WrongPin,
     #[error("invalid mnemonic sequence")]
     InvalidMnemonic,
-    #[error("no key in memory")]
-    KeyMissing,
+    #[error("session error")]
+    SessionError,
 
     // Crypto Errors
     #[error("padding error")]

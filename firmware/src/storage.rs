@@ -17,6 +17,7 @@ pub struct FlashData {
     pub enc_entropy: [u8; 48], // 4 magic + 32 entropy + 12 padding
 }
 
+#[derive(Debug)]
 pub struct WalletStorage<'s> {
     flash_storage: FlashStorage<'s>,
 }

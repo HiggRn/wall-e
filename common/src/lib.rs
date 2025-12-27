@@ -59,6 +59,9 @@ pub enum Command {
     Restore {
         mnemonic: [HString<MNEMONIC_MAX_WORD_LEN>; MNEMONIC_SEQ_LEN],
     },
+    /// Cancel current command
+    /// (only applies to command that requires confirmation)
+    Cancel,
 }
 
 /// Status of wallet

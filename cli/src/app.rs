@@ -410,12 +410,16 @@ impl App {
             AppState::TxConfirm => {
                 // Cancel transaction waiting?
                 if key.code == KeyCode::Esc {
+                    let _ = self.io_tx.send(IoAction::Send(Command::Cancel));
                     self.app_state = AppState::Unlocked;
                 }
             }
 
             AppState::Display { .. } => match key.code {
-                KeyCode::Esc => self.app_state = AppState::Unlocked,
+                KeyCode::Esc => {
+                    let _ = self.io_tx.send(IoAction::Send(Command::Cancel));
+                    self.app_state = AppState::Unlocked;
+                }
                 _ => {}
             },
 

@@ -58,7 +58,7 @@ pub struct Wallet<'a> {
     pub status: WalletStatus,
     storage: WalletStorage<'a>,
     pub session: Option<WalletSession>,
-    pub current_displayed: Option<DisplayedObject>,
+    pub current_displayed: Option<(DisplayedObject, bool)>,
     wrong_pin_count: u8,
 }
 
@@ -145,7 +145,6 @@ impl<'a> Wallet<'a> {
         let mut payload = [0u8; 48];
         decryptor.decrypt_padded_b2b_mut::<Pkcs7>(&enc_entropy, &mut payload)?;
         if payload[..4] != *MAGIC {
-            esp_println::dbg!(payload);
             if self.wrong_pin_count >= MAX_WRONG_PIN_COUNT {
                 // wipe wallet if wrong PIN too many times
                 self.wrong_pin_count = 0;
@@ -341,7 +340,7 @@ impl<'a> Wallet<'a> {
         let mut uri = HString::<64>::new();
         write!(uri, "ethereum:{addr}").map_err(|_| WalletError::AddressCapacityError)?;
         let qrcode = QrCode::new(uri.as_bytes())?;
-        self.current_displayed = Some(qrcode.into());
+        self.current_displayed = Some((qrcode.into(), false));
 
         self.status = WalletStatus::Ready;
 

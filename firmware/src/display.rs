@@ -18,7 +18,7 @@ use sha3::Keccak256;
 // Define a color for the display (ST7735 usually uses Rgb565)
 const TEXT_COLOR: Rgb565 = Rgb565::GREEN;
 const LABEL_COLOR: Rgb565 = Rgb565::CYAN;
-const BG_COLOR: Rgb565 = Rgb565::BLACK;
+pub const BG_COLOR: Rgb565 = Rgb565::BLACK;
 const QR_LIGHT: Rgb565 = Rgb565::WHITE;
 const QR_DARK: Rgb565 = Rgb565::BLACK;
 

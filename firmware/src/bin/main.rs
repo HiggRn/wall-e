@@ -9,6 +9,7 @@
 use alloc::{format, string::ToString};
 
 use common::{Command, Response, Transport, WalletStatus, error::WalletError};
+use embedded_graphics::draw_target::DrawTarget;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     clock::CpuClock,
@@ -34,6 +35,7 @@ use mipidsi::{
     options::{ColorOrder, Orientation, Rotation},
 };
 use wall_e_firmware::{
+    display::DisplayedObject,
     storage::WalletStorage,
     transport::SerialTransport,
     wallet::{Wallet, WalletSession},
@@ -139,7 +141,7 @@ fn main() -> ! {
             ) => {
                 if is_pressed && *idx >= words.len() {
                     // stop display
-                    wallet.current_displayed = Some("".to_string().into());
+                    wallet.current_displayed = None;
                     wallet.status = WalletStatus::PinSetting;
                     transport
                         .send(Response::RequireSetPin)
@@ -147,7 +149,7 @@ fn main() -> ! {
                 } else if is_pressed || *idx == 0 {
                     // display another word
                     wallet.current_displayed =
-                        Some(format!("{}: {}", *idx + 1, words[*idx]).into());
+                        Some((format!("{}: {}", *idx + 1, words[*idx]).into(), false));
                     *idx += 1;
 
                     Ok(())
@@ -165,7 +167,7 @@ fn main() -> ! {
                 if timer.elapsed() > Duration::from_secs(60) {
                     // time out, treated as cancel
                     // stop display
-                    wallet.current_displayed = Some("".to_string().into());
+                    wallet.current_displayed = None;
                     // cancel
                     wallet.status = WalletStatus::Ready;
                     // reset session
@@ -177,7 +179,7 @@ fn main() -> ! {
                 } else if is_pressed {
                     // button pressed, user confirmed
                     // stop display
-                    wallet.current_displayed = Some("".to_string().into());
+                    wallet.current_displayed = None;
                     // sign
                     match wallet.sign() {
                         Ok(response) => transport.send(response).map_err(|e| e.into()),
@@ -199,11 +201,17 @@ fn main() -> ! {
         }
 
         // display current_displayed
-        if let Some(ref current_displayed) = wallet.current_displayed {
-            if let Err(err) = current_displayed.display(&mut display) {
+        if let Some((ref current_displayed, ref mut has_displayed)) = wallet.current_displayed {
+            if !*has_displayed {
+                if let Err(err) = current_displayed.display(&mut display) {
+                    esp_println::println!("{err:?}");
+                }
+                *has_displayed = true;
+            }
+        } else {
+            if let Err(err) = display.clear(wall_e_firmware::display::BG_COLOR) {
                 esp_println::println!("{err:?}");
             }
-            wallet.current_displayed = None;
         }
 
         // get command
@@ -218,11 +226,15 @@ fn main() -> ! {
 
         // delegate command
         let result = match command {
-            Command::Ping => Ok(Some(wallet.ping())),
-            Command::GetStatus => Ok(Some(wallet.get_status())),
-            Command::Initialize => wallet.initialize(&mut rng),
-            Command::Unlock { mut pin } => wallet.unlock(&mut pin).map(|r| Some(r)),
-            Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin).map(|r| Some(r)),
+            Command::Ping => Ok(wallet.ping()),
+            Command::GetStatus => Ok(wallet.get_status()),
+            Command::Initialize => match wallet.initialize(&mut rng) {
+                Ok(Some(command)) => Ok(command),
+                Ok(None) => continue,
+                Err(e) => Err(e),
+            },
+            Command::Unlock { mut pin } => wallet.unlock(&mut pin),
+            Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin),
             Command::Sign { tx } => {
                 if let Some(WalletSession::Operating {
                     ref key_pair,
@@ -230,30 +242,46 @@ fn main() -> ! {
                 }) = wallet.session
                 {
                     // display tx_confirming
-                    wallet.current_displayed = Some(tx.clone().into());
+                    wallet.current_displayed = Some((tx.clone().into(), false));
                     // set timer
                     wallet.session = Some(WalletSession::Operating {
                         key_pair: key_pair.clone(),
                         tx_context: Some((tx, Instant::now())),
                     });
                     wallet.status = WalletStatus::TxConfirming;
-                    Ok(None)
+                    continue;
                 } else {
                     Err(WalletError::SessionError)
                 }
             }
-            Command::Receive => wallet.receive().map(|r| Some(r)),
-            Command::Wipe => wallet.wipe().map(|r| Some(r)),
+            Command::Receive => wallet.receive(),
+            Command::Wipe => wallet.wipe(),
             Command::Restore { mnemonic } => {
                 let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
-                wallet.restore(&phrase).map(|r| Some(r))
+                wallet.restore(&phrase)
+            }
+            Command::Cancel => {
+                if let Some(WalletSession::Operating {
+                    ref mut tx_context, ..
+                }) = wallet.session
+                    && tx_context.is_some()
+                {
+                    *tx_context = None;
+                    wallet.current_displayed = None;
+                    wallet.status = WalletStatus::Ready;
+                    Ok(Response::Done)
+                } else if let Some((DisplayedObject::QrCode(_), _)) = wallet.current_displayed {
+                    wallet.current_displayed = None;
+                    Ok(Response::Done)
+                } else {
+                    Ok(Response::Rejected)
+                }
             }
         };
 
         // send back results
         let e = match result {
-            Ok(Some(response)) => transport.send(response),
-            Ok(None) => continue,
+            Ok(response) => transport.send(response),
             Err(err) => transport.send(Response::Error(err)),
         };
         if let Err(transport_err) = e {

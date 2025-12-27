@@ -46,32 +46,22 @@ pub fn try_connect() -> (Option<SerialTransport>, AppState) {
 
         let mut transport = SerialTransport::new(port);
 
-        // send PING to verify
-        if transport.send(Command::Ping).is_ok() {
-            // wait briefly for a PONG response
+        // ask for status to verify
+        if transport.send(Command::GetStatus).is_ok() {
+            // wait briefly for a response
             let start = Instant::now();
             while start.elapsed() < Duration::from_millis(500) {
-                if let Ok(Some(Response::Pong)) = transport.poll() {
-                    // ask for status
-                    if let Err(err) = transport.send(Command::GetStatus) {
-                        let app_state =
-                            AppState::Error(format!("{err}"), Box::new(AppState::Unconnected));
-                        return (None, app_state);
-                    }
-
-                    let app_state = match get_response(&mut transport) {
-                        Ok(Response::Status(WalletStatus::Empty)) => AppState::EmptyWallet,
-                        Ok(Response::Status(WalletStatus::Locked)) => AppState::PinInput {
+                if let Ok(Some(r)) = transport.poll() {
+                    let app_state = match r {
+                        Response::Status(WalletStatus::Empty) => AppState::EmptyWallet,
+                        Response::Status(WalletStatus::Locked) => AppState::PinInput {
                             pin: vec![],
                             is_set_pin: false,
                         },
-                        Ok(r) => AppState::Error(
+                        r => AppState::Error(
                             format!("unexpected response {r:?}"),
                             Box::new(AppState::Unconnected),
                         ),
-                        Err(err) => {
-                            AppState::Error(format!("{err}"), Box::new(AppState::Unconnected))
-                        }
                     };
 
                     // attach transport

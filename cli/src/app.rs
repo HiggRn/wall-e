@@ -192,7 +192,7 @@ impl App {
             }
 
             // --- Restore ---
-            (AppState::MnemonicInput { .. }, Response::Done) => {
+            (AppState::MnemonicInput { .. }, Response::RequireSetPin) => {
                 self.app_state = AppState::PinInput {
                     pin: vec![],
                     is_set_pin: true,

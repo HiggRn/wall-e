@@ -10,8 +10,10 @@ pub enum WalletError {
     Serialization(#[from] postcard::Error),
 
     // Logic Errors
-    #[error("incorrect pin")]
+    #[error("incorrect PIN")]
     WrongPin,
+    #[error("incorrect PIN, data wiped")]
+    WrongPinDataWiped,
     #[error("invalid mnemonic sequence")]
     InvalidMnemonic,
     #[error("session error")]

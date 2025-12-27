@@ -8,7 +8,7 @@
 
 use alloc::{format, string::ToString};
 
-use common::{Command, MAX_WRONG_PIN_COUNT, Response, Transport, WalletStatus, error::WalletError};
+use common::{Command, Response, Transport, WalletStatus, error::WalletError};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     clock::CpuClock,
@@ -22,14 +22,17 @@ use esp_hal::{
     },
     time::{Duration, Instant, Rate},
     uart::{Config as UartConfig, Uart},
-    usb_serial_jtag::UsbSerialJtag,
 };
 
 use esp_storage::FlashStorage;
 use itertools::Itertools;
-use log::error;
 
-use mipidsi::{Builder, interface::SpiInterface, models::ST7735s};
+use mipidsi::{
+    Builder,
+    interface::SpiInterface,
+    models,
+    options::{ColorOrder, Orientation, Rotation},
+};
 use wall_e_firmware::{
     storage::WalletStorage,
     transport::SerialTransport,
@@ -50,7 +53,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
 fn main() -> ! {
-    esp_println::logger::init_logger_from_env();
+    esp_println::logger::init_logger(log::LevelFilter::Info);
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
@@ -94,111 +97,54 @@ fn main() -> ! {
     )
     .unwrap()
     .with_sck(peripherals.GPIO2)
-    .with_mosi(peripherals.GPIO3);
+    .with_mosi(peripherals.GPIO3)
+    .with_miso(peripherals.GPIO5);
     let spi_device = ExclusiveDevice::new_no_delay(spi, cs).unwrap();
     let mut spi_buffer = [0u8; 512];
 
     let di = SpiInterface::new(spi_device, dc, &mut spi_buffer);
-    let mut display = Builder::new(ST7735s, di)
-        .display_size(80, 160)
+    let mut display = Builder::new(models::ILI9341Rgb565, di)
+        .orientation(
+            Orientation::new()
+                .rotate(Rotation::Deg270)
+                .flip_horizontal(),
+        )
+        .color_order(ColorOrder::Bgr)
         .reset_pin(rst)
         .init(&mut delay)
         .unwrap();
 
-    // wallet wrong pin count
-    let mut wrong_pin_count = 0;
-
-    // turn LED green to show everything is fine
-    let mut led = Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default());
-    led.set_high();
+    let mut led = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
 
     loop {
-        // get command
-        let command = match transport.poll() {
-            Ok(Some(command)) => command,
-            Ok(None) => continue,
-            Err(err) => {
-                esp_println::println!("{err}");
-                continue;
-            }
-        };
-
-        // delegate command
-        let result = match command {
-            Command::Ping => Ok(wallet.ping()),
-            Command::GetStatus => Ok(wallet.get_status()),
-            Command::Initialize => wallet.initialize(&mut rng),
-            Command::Unlock { mut pin } => wallet.unlock(&mut pin),
-            Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin),
-            Command::Sign { tx } => {
-                if let Some(WalletSession::Operating {
-                    ref key_pair,
-                    tx_context: None,
-                }) = wallet.session
-                {
-                    // display tx_confirming
-                    wallet.current_displayed = Some(tx.clone().into());
-                    // set timer
-                    wallet.session = Some(WalletSession::Operating {
-                        key_pair: key_pair.clone(),
-                        tx_context: Some((tx, Instant::now())),
-                    });
-                    wallet.status = WalletStatus::TxConfirming;
-                    Ok(Response::Confirming)
-                } else {
-                    Err(WalletError::SessionError)
-                }
-            }
-            Command::Receive => wallet.receive(),
-            Command::Wipe => wallet.wipe(),
-            Command::Restore { mnemonic } => {
-                let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
-                wallet.restore(&phrase)
-            }
-        };
-
-        // send back results
-        let e = match result {
-            Ok(response) => transport.send(response),
-            Err(WalletError::WrongPin) => {
-                wrong_pin_count += 1;
-                transport.send(Response::Error(WalletError::WrongPin))
-            }
-            Err(err) => transport.send(Response::Error(err)),
-        };
-        if let Err(transport_err) = e {
-            esp_println::println!("{transport_err}");
-        }
-
-        // wipe wallet if wrong PIN too many times
-        if wrong_pin_count >= MAX_WRONG_PIN_COUNT {
-            wrong_pin_count = 0;
-            let _ = wallet.wipe().unwrap();
-            continue;
-        }
-
         // detect button pressed or not
         let is_low = button.is_low();
-        let is_pressed = is_low && !was_pressed;
+        let is_pressed = is_low && (!was_pressed);
         was_pressed = is_low;
 
+        if is_pressed {
+            led.set_high();
+        } else {
+            led.set_low();
+        }
+
         // display if in particular state
-        let result = match (wallet.status, &mut wallet.session) {
+        let result = match (&mut wallet.status, &mut wallet.session) {
             (
-                WalletStatus::MnemonicConfirming { ref mut idx },
+                WalletStatus::MnemonicConfirming { idx },
                 Some(WalletSession::Seeding {
                     entropy: _,
                     mnemonic: Some(words),
                 }),
             ) => {
-                if *idx == words.len() {
+                if is_pressed && *idx >= words.len() {
                     // stop display
-                    wallet.current_displayed = None;
+                    wallet.current_displayed = Some("".to_string().into());
                     wallet.status = WalletStatus::PinSetting;
                     transport
                         .send(Response::RequireSetPin)
                         .map_err(|e| e.into())
-                } else if is_pressed {
+                } else if is_pressed || *idx == 0 {
                     // display another word
                     wallet.current_displayed =
                         Some(format!("{}: {}", *idx + 1, words[*idx]).into());
@@ -219,7 +165,7 @@ fn main() -> ! {
                 if timer.elapsed() > Duration::from_secs(60) {
                     // time out, treated as cancel
                     // stop display
-                    wallet.current_displayed = None;
+                    wallet.current_displayed = Some("".to_string().into());
                     // cancel
                     wallet.status = WalletStatus::Ready;
                     // reset session
@@ -231,7 +177,7 @@ fn main() -> ! {
                 } else if is_pressed {
                     // button pressed, user confirmed
                     // stop display
-                    wallet.current_displayed = None;
+                    wallet.current_displayed = Some("".to_string().into());
                     // sign
                     match wallet.sign() {
                         Ok(response) => transport.send(response).map_err(|e| e.into()),
@@ -257,6 +203,61 @@ fn main() -> ! {
             if let Err(err) = current_displayed.display(&mut display) {
                 esp_println::println!("{err:?}");
             }
+            wallet.current_displayed = None;
+        }
+
+        // get command
+        let command = match transport.poll() {
+            Ok(Some(command)) => command,
+            Ok(None) => continue,
+            Err(err) => {
+                esp_println::println!("{err}");
+                continue;
+            }
+        };
+
+        // delegate command
+        let result = match command {
+            Command::Ping => Ok(Some(wallet.ping())),
+            Command::GetStatus => Ok(Some(wallet.get_status())),
+            Command::Initialize => wallet.initialize(&mut rng),
+            Command::Unlock { mut pin } => wallet.unlock(&mut pin).map(|r| Some(r)),
+            Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin).map(|r| Some(r)),
+            Command::Sign { tx } => {
+                if let Some(WalletSession::Operating {
+                    ref key_pair,
+                    tx_context: None,
+                }) = wallet.session
+                {
+                    // display tx_confirming
+                    wallet.current_displayed = Some(tx.clone().into());
+                    // set timer
+                    wallet.session = Some(WalletSession::Operating {
+                        key_pair: key_pair.clone(),
+                        tx_context: Some((tx, Instant::now())),
+                    });
+                    wallet.status = WalletStatus::TxConfirming;
+                    Ok(None)
+                } else {
+                    Err(WalletError::SessionError)
+                }
+            }
+            Command::Receive => wallet.receive().map(|r| Some(r)),
+            Command::Wipe => wallet.wipe().map(|r| Some(r)),
+            Command::Restore { mnemonic } => {
+                let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
+                wallet.restore(&phrase).map(|r| Some(r))
+            }
+        };
+
+        // send back results
+        let e = match result {
+            Ok(Some(response)) => transport.send(response),
+            Ok(None) => continue,
+            Err(err) => transport.send(Response::Error(err)),
+        };
+        if let Err(transport_err) = e {
+            esp_println::println!("{transport_err}");
         }
     }
 }

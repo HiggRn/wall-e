@@ -11,22 +11,30 @@
             "attrs": {}
         },
         {
-            "type": "chip-st7735",
-            "id": "lcd",
-            "top": -60,
+            "type": "wokwi-ili9341",
+            "id": "lcd1",
+            "top": -100,
             "left": 200,
+            "rotate": 90,
+            "attrs": {}
+        },
+        {
+            "type": "wokwi-pushbutton",
+            "id": "btn1",
+            "top": 200,
+            "left": 150,
             "attrs": {
-                "rows": "160",
-                "cols": "80"
+                "color": "green",
+                "text": "confirm"
             }
         },
         {
             "type": "wokwi-led",
             "id": "led1",
-            "top": 0,
-            "left": 0,
+            "top": 260,
+            "left": 100,
             "attrs": {
-                "color": "green"
+                "color": "red"
             }
         }
     ],
@@ -44,61 +52,104 @@
             []
         ],
         [
-            "lcd:GND",
+            "lcd1:GND",
             "esp:GND.1",
             "black",
-            []
+            [
+                "v0"
+            ]
         ],
         [
-            "lcd:VCC",
+            "lcd1:VCC",
             "esp:3V3.1",
+            "red",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:LED",
+            "esp:3V3.1",
+            "red",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:CS",
+            "esp:7",
+            "green",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:D/C",
+            "esp:6",
+            "blue",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:RST",
+            "esp:10",
+            "orange",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:MOSI",
+            "esp:3",
+            "magenta",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:SCK",
+            "esp:2",
+            "yellow",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "lcd1:MISO",
+            "esp:5",
+            "pink",
+            [
+                "v0"
+            ]
+        ],
+        [
+            "btn1:1.l",
+            "esp:9",
+            "green",
+            [
+                "h0"
+            ]
+        ],
+        [
+            "btn1:2.l",
+            "esp:GND.1",
+            "black",
+            [
+                "h0"
+            ]
+        ],
+        [
+            "led1:A",
+            "esp:4",
             "red",
             []
         ],
         [
-            "lcd:SCK",
-            "esp:2",
-            "green",
-            []
-        ],
-        [
-            "lcd:MOSI",
-            "esp:3",
-            "blue",
-            []
-        ],
-        [
-            "lcd:CS",
-            "esp:7",
-            "yellow",
-            []
-        ],
-        [
-            "lcd:DC",
-            "esp:6",
-            "orange",
-            []
-        ],
-        [
-            "lcd:RST",
-            "esp:10",
-            "white",
-            []
-        ],
-        [
-            "esp:1",
-            "led1:A",
-            "green",
-            []
-        ],
-        [
-            "esp:GND.1",
             "led1:C",
+            "esp:GND.2",
             "black",
             []
         ]
-    ],
-    "dependencies": {
-        "chip-st7735": "github:martysweet/st7735-wokwi-chip@1.0.1"
-    }
+    ]
 }

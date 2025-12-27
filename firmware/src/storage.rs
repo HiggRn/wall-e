@@ -31,7 +31,27 @@ impl<'s> WalletStorage<'s> {
         // 1. Serialize struct to bytes
         // Max size = 80 bytes data + overhead ~ 100 bytes
         let mut buffer = [0u8; 128];
-        let used_bytes = postcard::to_slice(data, &mut buffer)?;
+        let used = postcard::to_slice(data, &mut buffer)?;
+
+        // add padding
+        const ALIGNMENT: usize = 4;
+
+        let len = used.len();
+        let remainder = len % ALIGNMENT;
+        let padded_len = if remainder == 0 {
+            len
+        } else {
+            len + (ALIGNMENT - remainder)
+        };
+
+        // Ensure we don't overflow the buffer
+        if padded_len > buffer.len() {
+            return Err(WalletError::FlashStorageError);
+        }
+
+        // Create a slice that includes the padding
+        // Since 'buffer' was initialized to 0, the padding bytes are already 0.
+        let padded_slice = &buffer[0..padded_len];
 
         // 2. ERASE the sector first!
         // Flash can only flip 1 -> 0. Erase flips 0 -> 1.
@@ -43,7 +63,7 @@ impl<'s> WalletStorage<'s> {
 
         // 3. WRITE the bytes
         self.flash_storage
-            .write(STORAGE_OFFSET, used_bytes)
+            .write(STORAGE_OFFSET, padded_slice)
             .map_err(|_| WalletError::FlashStorageError)?;
 
         Ok(())

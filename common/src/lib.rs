@@ -85,8 +85,6 @@ pub enum Response {
     Pong,
     /// Reject command
     Rejected,
-    /// Confirming
-    Confirming,
     /// Require setting PIN
     RequireSetPin,
     /// Command done

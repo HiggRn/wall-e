@@ -25,7 +25,7 @@ pub fn draw_frame(f: &mut Frame, app_state: &AppState) {
         AppState::MnemonicConfirm => draw_centered_message(
             f,
             "Confirm Mnemonic",
-            "Please match the mnemonic on your device.",
+            "Please confirm the mnemonic on your device.",
         ),
         AppState::MnemonicInput { mnemonic } => draw_mnemonic_input(f, mnemonic),
         AppState::PinInput { pin, is_set_pin } => draw_pin_input(f, pin, *is_set_pin),

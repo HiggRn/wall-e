@@ -1,5 +1,5 @@
 use common::{Command, MAX_MESSAGE_SIZE, Response, Transport, error::TransportError};
-use esp_hal::{Blocking, uart::Uart, usb_serial_jtag::UsbSerialJtag};
+use esp_hal::{Blocking, uart::Uart};
 
 pub struct SerialTransport<'d> {
     // serial: UsbSerialJtag<'d, Blocking>,
@@ -25,6 +25,10 @@ impl<'d> Transport<Response, Command> for SerialTransport<'d> {
         if self.rx_idx >= self.rx_buffer.len() {
             self.rx_idx = 0; // Reset on overflow
             return Err(TransportError::BufferOverflow);
+        }
+
+        if !self.serial.read_ready() {
+            return Ok(None);
         }
 
         // We use a non-blocking read pattern here (assuming typical embedded-hal-nb or similar)

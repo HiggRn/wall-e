@@ -6,7 +6,9 @@ use aes::Aes256;
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
-use common::{PIN_LEN, Response, Signature, TxFields, WalletStatus, error::WalletError};
+use common::{
+    MAX_WRONG_PIN_COUNT, PIN_LEN, Response, Signature, TxFields, WalletStatus, error::WalletError,
+};
 use esp_hal::{rng::Trng, time::Instant};
 use heapless::String as HString;
 use hmac::Hmac;
@@ -57,6 +59,7 @@ pub struct Wallet<'a> {
     storage: WalletStorage<'a>,
     pub session: Option<WalletSession>,
     pub current_displayed: Option<DisplayedObject>,
+    wrong_pin_count: u8,
 }
 
 impl<'a> Wallet<'a> {
@@ -72,6 +75,7 @@ impl<'a> Wallet<'a> {
             storage,
             session: None,
             current_displayed: None,
+            wrong_pin_count: 0,
         }
     }
 
@@ -83,9 +87,9 @@ impl<'a> Wallet<'a> {
         Response::Status(self.status)
     }
 
-    pub fn initialize(&mut self, rng: &mut Trng) -> Result<Response, WalletError> {
+    pub fn initialize(&mut self, rng: &mut Trng) -> Result<Option<Response>, WalletError> {
         if self.status != WalletStatus::Empty {
-            return Ok(Response::Rejected);
+            return Ok(Some(Response::Rejected));
         }
 
         if self.session.is_some() {
@@ -105,7 +109,7 @@ impl<'a> Wallet<'a> {
             mnemonic: Some(mnemonic.words().collect()),
         });
 
-        Ok(Response::Confirming)
+        Ok(None)
     }
 
     pub fn unlock(&mut self, pin: &mut [u8]) -> Result<Response, WalletError> {
@@ -138,10 +142,19 @@ impl<'a> Wallet<'a> {
 
         // decrypt entropy
         let decryptor = Aes256CbcDec::new(&kek.into(), (&iv).into());
-        let mut payload = [0u8; 36];
+        let mut payload = [0u8; 48];
         decryptor.decrypt_padded_b2b_mut::<Pkcs7>(&enc_entropy, &mut payload)?;
         if payload[..4] != *MAGIC {
-            return Err(WalletError::WrongPin);
+            esp_println::dbg!(payload);
+            if self.wrong_pin_count >= MAX_WRONG_PIN_COUNT {
+                // wipe wallet if wrong PIN too many times
+                self.wrong_pin_count = 0;
+                let _ = self.wipe()?;
+                return Err(WalletError::WrongPinDataWiped);
+            } else {
+                self.wrong_pin_count += 1;
+                return Err(WalletError::WrongPin);
+            }
         }
         let entropy = &mut payload[4..36];
 
@@ -373,7 +386,7 @@ impl<'a> Wallet<'a> {
         let (ent, ent_len) =
             Mnemonic::parse_in_normalized(Language::English, phrase)?.to_entropy_array();
 
-        if ent_len != ENTROPY_SIZE + 1 {
+        if ent_len != ENTROPY_SIZE {
             return Err(WalletError::InvalidMnemonic);
         }
 

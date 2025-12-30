@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::{self, Receiver, Sender},
+    time::{Duration, Instant},
+};
 
 use common::{Command, Response, Transport, WalletStatus};
 use serialport::{SerialPortType, UsbPortInfo};
@@ -7,7 +10,6 @@ use crate::{app::AppState, transport::SerialTransport};
 
 pub enum IoEvent {
     Connected(AppState), // send initial state
-    Disconnected,
     ResponseReceived(Response),
     Error(String),
 }
@@ -17,21 +19,65 @@ pub enum IoAction {
     Send(Command),
 }
 
-pub fn try_connect() -> (Option<SerialTransport>, AppState) {
+/// Spawns the background IO thread and returns the communication channels.
+pub fn spawn_background_thread() -> (Sender<IoAction>, Receiver<IoEvent>) {
+    let (tx_ui, rx_ui) = mpsc::channel::<IoEvent>(); // IO -> UI
+    let (tx_io, rx_io) = mpsc::channel::<IoAction>(); // UI -> IO
+
+    std::thread::spawn(move || {
+        let mut transport: Option<SerialTransport> = None;
+
+        loop {
+            // 1. Check for incoming commands from UI (Non-blocking)
+            if let Ok(action) = rx_io.try_recv() {
+                match action {
+                    IoAction::Connect => {
+                        if let (Some(t), app_state) = try_connect() {
+                            transport = Some(t);
+                            let _ = tx_ui.send(IoEvent::Connected(app_state));
+                        }
+                    }
+                    IoAction::Send(cmd) => {
+                        if let Some(t) = &mut transport {
+                            if let Err(e) = t.send(cmd) {
+                                let _ = tx_ui.send(IoEvent::Error(e.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Poll the device (Non-blocking)
+            if let Some(t) = &mut transport {
+                match t.poll() {
+                    Ok(Some(resp)) => {
+                        let _ = tx_ui.send(IoEvent::ResponseReceived(resp));
+                    }
+                    Err(e) => {
+                        let _ = tx_ui.send(IoEvent::Error(e.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Sleep briefly to prevent 100% CPU usage on the IO thread
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+
+    (tx_io, rx_ui)
+}
+
+fn try_connect() -> (Option<SerialTransport>, AppState) {
     // list all available ports
     let ports = serialport::available_ports().unwrap_or_default();
 
     for p in ports {
         // filter for Espressif VID (0x303A)
-        let is_real_hardware = matches!(
+        if !matches!(
             p.port_type,
             SerialPortType::UsbPort(UsbPortInfo { vid: 0x303A, .. })
-        );
-
-        // or simulation
-        let is_simulation = p.port_name == "COM9" || p.port_name == "/dev/ttyS0";
-
-        if !is_real_hardware && !is_simulation {
+        ) {
             continue;
         }
 

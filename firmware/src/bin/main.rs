@@ -6,9 +6,8 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use alloc::{format, string::ToString};
+use alloc::format;
 
-use bip39::Language;
 use common::{Command, Response, Transport, WalletStatus, error::WalletError};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -25,10 +24,7 @@ use esp_hal::{
     time::{Duration, Instant, Rate},
     uart::{Config as UartConfig, Uart},
 };
-
 use esp_storage::FlashStorage;
-use itertools::Itertools;
-
 use mipidsi::{
     Builder,
     interface::SpiInterface,
@@ -106,7 +102,7 @@ fn main() -> ! {
     let mut spi_buffer = [0u8; 512];
 
     let di = SpiInterface::new(spi_device, dc, &mut spi_buffer);
-    let mut display = Builder::new(models::ILI9341Rgb565, di)
+    let mut display = Builder::new(models::ST7735s, di)
         .orientation(
             Orientation::new()
                 .rotate(Rotation::Deg270)
@@ -117,19 +113,11 @@ fn main() -> ! {
         .init(&mut delay)
         .unwrap();
 
-    let mut led = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
-
     loop {
         // detect button pressed or not
         let is_low = button.is_low();
         let is_pressed = is_low && (!was_pressed);
         was_pressed = is_low;
-
-        if is_pressed {
-            led.set_high();
-        } else {
-            led.set_low();
-        }
 
         // display if in particular state
         let result = match (&mut wallet.status, &mut wallet.session) {
@@ -227,13 +215,13 @@ fn main() -> ! {
 
         // delegate command
         let result = match command {
-            Command::Ping => Ok(wallet.ping()),
             Command::GetStatus => Ok(wallet.get_status()),
             Command::Initialize => match wallet.initialize(&mut rng) {
                 Ok(Some(command)) => Ok(command),
                 Ok(None) => continue,
                 Err(e) => Err(e),
             },
+            Command::Lock => Ok(wallet.lock()),
             Command::Unlock { mut pin } => wallet.unlock(&mut pin),
             Command::SetPin { mut pin } => wallet.set_pin(&mut rng, &mut pin),
             Command::Sign { tx } => {
@@ -257,12 +245,7 @@ fn main() -> ! {
             }
             Command::Receive => wallet.receive(),
             Command::Wipe => wallet.wipe(),
-            Command::Restore { mnemonic } => {
-                let phrase = mnemonic
-                    .map(|idx| Language::English.word_list()[idx as usize].to_string())
-                    .join(" ");
-                wallet.restore(&phrase)
-            }
+            Command::Restore { ref mnemonic } => wallet.restore(mnemonic),
             Command::Cancel => {
                 if let Some(WalletSession::Operating {
                     ref mut tx_context, ..

@@ -1,13 +1,13 @@
+use alloc::vec::Vec;
 use core::{fmt::Write, str::FromStr};
-
-use alloc::{string::String, vec::Vec};
 
 use aes::Aes256;
 use bip32::{DerivationPath, XPrv};
-use bip39::{Language, Mnemonic};
+use bip39::Mnemonic;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use common::{
-    MAX_WRONG_PIN_COUNT, PIN_LEN, Response, Signature, TxFields, WalletStatus, error::WalletError,
+    MAX_WRONG_PIN_COUNT, MNEMONIC_SEQ_LEN, PIN_LEN, Response, Signature, TxFields, WalletStatus,
+    error::WalletError,
 };
 use esp_hal::{rng::Trng, time::Instant};
 use heapless::String as HString;
@@ -79,10 +79,6 @@ impl<'a> Wallet<'a> {
         }
     }
 
-    pub fn ping(&self) -> Response {
-        Response::Pong
-    }
-
     pub fn get_status(&self) -> Response {
         Response::Status(self.status)
     }
@@ -110,6 +106,16 @@ impl<'a> Wallet<'a> {
         });
 
         Ok(None)
+    }
+
+    pub fn lock(&mut self) -> Response {
+        self.status = if matches!(self.session, Some(WalletSession::Operating { .. })) {
+            WalletStatus::Locked
+        } else {
+            WalletStatus::Empty
+        };
+        self.session = None;
+        Response::Done
     }
 
     pub fn unlock(&mut self, pin: &mut [u8]) -> Result<Response, WalletError> {
@@ -372,7 +378,7 @@ impl<'a> Wallet<'a> {
         Ok(Response::Done)
     }
 
-    pub fn restore(&mut self, phrase: &String) -> Result<Response, WalletError> {
+    pub fn restore(&mut self, mnemonic: &[u16; MNEMONIC_SEQ_LEN]) -> Result<Response, WalletError> {
         if self.status != WalletStatus::Empty {
             return Ok(Response::Rejected);
         }
@@ -382,15 +388,30 @@ impl<'a> Wallet<'a> {
         }
 
         // restore entropy
-        // TODO: get rid of the phrase construction entirely
-        let (ent, ent_len) = Mnemonic::parse_in(Language::English, phrase)?.to_entropy_array();
+        let mut bits = [false; MNEMONIC_SEQ_LEN * 11];
 
-        if ent_len != ENTROPY_SIZE {
-            return Err(WalletError::InvalidMnemonic);
+        for (i, idx) in mnemonic.iter().enumerate() {
+            for j in 0..11 {
+                bits[i * 11 + j] = idx >> (10 - j) & 1 == 1;
+            }
         }
 
         let mut entropy = [0u8; ENTROPY_SIZE];
-        entropy.copy_from_slice(&ent[..ENTROPY_SIZE]);
+        for i in 0..ENTROPY_SIZE {
+            for j in 0..8 {
+                if bits[i * 8 + j] {
+                    entropy[i] += 1 << (7 - j);
+                }
+            }
+        }
+
+        // verify the checksum
+        let check = Sha256::digest(&entropy[0..ENTROPY_SIZE]);
+        for i in 0..ENTROPY_SIZE / 4 {
+            if bits[8 * ENTROPY_SIZE + i] != ((check[i / 8] & (1 << (7 - (i % 8)))) > 0) {
+                return Err(WalletError::InvalidMnemonic);
+            }
+        }
 
         // ask for PIN setting
         self.status = WalletStatus::PinSetting;

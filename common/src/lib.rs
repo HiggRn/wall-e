@@ -36,12 +36,12 @@ pub const MAX_WRONG_PIN_COUNT: u8 = 10;
 /// Commands from the CLI app
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
-    /// Check if connected, expect Pong
-    Ping,
     /// Get wallet status, expect Status
     GetStatus,
     /// Initialize wallet, expect RequireSetPin
     Initialize,
+    /// Lock wallet
+    Lock,
     /// Unlock wallet through PIN (ASCII encoded), expect Done
     /// TODO: this is not safe, should move PIN input to wallet
     Unlock { pin: [u8; PIN_LEN] },
@@ -82,8 +82,6 @@ pub enum WalletStatus {
 /// Response from the wallet
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
-    /// Connected
-    Pong,
     /// Reject command
     Rejected,
     /// Require setting PIN

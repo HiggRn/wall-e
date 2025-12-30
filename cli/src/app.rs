@@ -145,8 +145,9 @@ impl App {
                 match event {
                     IoEvent::ResponseReceived(resp) => self.handle_response(resp),
                     IoEvent::Connected(app_state) => self.app_state = app_state,
-                    IoEvent::Error(e) => { /* handle error */ }
-                    _ => {}
+                    IoEvent::Error(e) => {
+                        self.app_state = AppState::Error(e, Box::new(AppState::Unconnected));
+                    }
                 }
             }
 
@@ -281,6 +282,9 @@ impl App {
         // Global exit
         if key.code == KeyCode::Char('q') {
             self.app_state = AppState::Exit;
+            if self.app_state != AppState::Unconnected {
+                let _ = self.io_tx.send(IoAction::Send(Command::Lock));
+            }
             return;
         }
 
@@ -327,7 +331,7 @@ impl App {
                         Language::English.find_word(s).unwrap()
                     });
 
-                    let _res = self.io_tx.send(IoAction::Send(Command::Restore {
+                    let _ = self.io_tx.send(IoAction::Send(Command::Restore {
                         mnemonic: mnemonic_idx,
                     }));
 

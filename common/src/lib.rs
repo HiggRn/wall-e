@@ -56,9 +56,7 @@ pub enum Command {
     Wipe,
     /// Restore wallet from the mnemonic sentence, expect RequireSetPin
     /// TODO: this is not safe, should move mnemonic input to wallet
-    Restore {
-        mnemonic: [HString<MNEMONIC_MAX_WORD_LEN>; MNEMONIC_SEQ_LEN],
-    },
+    Restore { mnemonic: [u16; MNEMONIC_SEQ_LEN] },
     /// Cancel current command
     /// (only applies to command that requires confirmation)
     Cancel,
@@ -126,7 +124,7 @@ pub struct Signature {
 impl Into<HString<SIGNATURE_LEN>> for Signature {
     fn into(self) -> HString<SIGNATURE_LEN> {
         // There shall be no error here
-        format!(SIGNATURE_LEN; "0x{}{}{:#x}", hex::encode(self.r), hex::encode(self.s), self.v)
+        format!(SIGNATURE_LEN; "0x{}{}{:02x}", hex::encode(self.r), hex::encode(self.s), self.v)
             .unwrap()
     }
 }

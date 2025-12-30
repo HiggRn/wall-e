@@ -8,6 +8,7 @@
 
 use alloc::{format, string::ToString};
 
+use bip39::Language;
 use common::{Command, Response, Transport, WalletStatus, error::WalletError};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_hal_bus::spi::ExclusiveDevice;
@@ -257,7 +258,9 @@ fn main() -> ! {
             Command::Receive => wallet.receive(),
             Command::Wipe => wallet.wipe(),
             Command::Restore { mnemonic } => {
-                let phrase = mnemonic.iter().map(|s| s.to_string()).join(" ");
+                let phrase = mnemonic
+                    .map(|idx| Language::English.word_list()[idx as usize].to_string())
+                    .join(" ");
                 wallet.restore(&phrase)
             }
             Command::Cancel => {

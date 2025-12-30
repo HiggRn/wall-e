@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use common::{Command, Response, Transport, WalletStatus, error::TransportError};
+use common::{Command, Response, Transport, WalletStatus};
 use serialport::{SerialPortType, UsbPortInfo};
 
 use crate::{app::AppState, transport::SerialTransport};
@@ -75,26 +75,4 @@ pub fn try_connect() -> (Option<SerialTransport>, AppState) {
     }
 
     (None, AppState::Unconnected)
-}
-
-pub fn get_response(
-    transport: &mut dyn Transport<Command, Response>,
-) -> Result<Response, TransportError> {
-    let start = Instant::now();
-    // this must be longer than the timeout for confirming transaction (5s)
-    let timeout = Duration::from_secs(10);
-
-    while start.elapsed() < timeout {
-        match transport.poll() {
-            Ok(Some(response)) => return Ok(response),
-            Ok(None) => {
-                // sleep to yield CPU
-                std::thread::sleep(Duration::from_millis(10));
-                continue;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    Err(TransportError::IOTimeout)
 }

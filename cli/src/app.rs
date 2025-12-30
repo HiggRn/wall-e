@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use bip39::Language;
 use common::{
     ADDR_LEN, Command, MNEMONIC_MAX_WORD_LEN, MNEMONIC_SEQ_LEN, PIN_LEN, Response, TxFields,
     error::WalletError,
@@ -49,9 +50,9 @@ impl SignForm {
 
 #[derive(Debug, Error)]
 pub enum ParseTxFieldsError {
-    #[error("int parsing error")]
+    #[error("int parsing error: {0}")]
     ParseIntError(#[from] std::num::ParseIntError),
-    #[error("hex decoding error")]
+    #[error("hex decoding error: {0}")]
     ParseHexError(#[from] hex::FromHexError),
 }
 
@@ -60,7 +61,8 @@ impl TryInto<TxFields> for SignForm {
 
     fn try_into(self) -> Result<TxFields, Self::Error> {
         let mut to = [0u8; ADDR_LEN];
-        to.copy_from_slice(&hex::decode(&self.data.strip_prefix("0x").unwrap())?);
+        eprintln!("{}", self.to.strip_prefix("0x").unwrap());
+        to.copy_from_slice(&hex::decode(&self.to.strip_prefix("0x").unwrap())?);
         Ok(TxFields {
             chain_id: 11155111, // Sepolia Testnet
             nonce: self.nonce.parse()?,
@@ -307,17 +309,29 @@ impl App {
 
             AppState::MnemonicInput { mnemonic } => match key.code {
                 KeyCode::Enter if mnemonic.len() == MNEMONIC_SEQ_LEN => {
-                    // Convert Vec<String> to [heapless::String; 24]
-                    let mut mnemonic_iter = mnemonic.iter_mut();
-                    let heapless_mnemonic = core::array::from_fn(|_| {
-                        // guaranteed by the implementation logic, this can't fail
+                    for s in mnemonic.iter() {
+                        if Language::English.find_word(s).is_none() {
+                            self.app_state = AppState::Error(
+                                format!("invalid mnemonic '{s}'"),
+                                Box::new(AppState::MnemonicInput {
+                                    mnemonic: vec![String::new()],
+                                }),
+                            );
+                            return;
+                        }
+                    }
+
+                    let mut mnemonic_iter = mnemonic.iter();
+                    let mnemonic_idx = core::array::from_fn(|_| {
                         let s = mnemonic_iter.next().unwrap();
-                        heapless::String::from_str(s).unwrap()
+                        Language::English.find_word(s).unwrap()
                     });
 
-                    let _ = self.io_tx.send(IoAction::Send(Command::Restore {
-                        mnemonic: heapless_mnemonic,
+                    let _res = self.io_tx.send(IoAction::Send(Command::Restore {
+                        mnemonic: mnemonic_idx,
                     }));
+
+                    // eprintln!("Command sent! {res:?}");
                 }
                 KeyCode::Enter => mnemonic.push(String::new()),
                 KeyCode::Char(c) if c.is_ascii_alphabetic() => {

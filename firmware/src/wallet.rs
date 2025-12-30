@@ -382,8 +382,8 @@ impl<'a> Wallet<'a> {
         }
 
         // restore entropy
-        let (ent, ent_len) =
-            Mnemonic::parse_in_normalized(Language::English, phrase)?.to_entropy_array();
+        // TODO: get rid of the phrase construction entirely
+        let (ent, ent_len) = Mnemonic::parse_in(Language::English, phrase)?.to_entropy_array();
 
         if ent_len != ENTROPY_SIZE {
             return Err(WalletError::InvalidMnemonic);

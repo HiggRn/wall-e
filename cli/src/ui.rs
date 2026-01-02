@@ -1,10 +1,15 @@
 use common::PIN_LEN;
+use qrcode::QrCode;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols::Marker,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Wrap,
+        canvas::{Canvas, Rectangle},
+    },
 };
 
 use crate::app::{AppState, SignForm};
@@ -15,6 +20,7 @@ const COLOR_SECONDARY: Color = Color::LightGreen;
 const COLOR_ALERT: Color = Color::Red;
 const COLOR_INACTIVE: Color = Color::DarkGray;
 const COLOR_TEXT: Color = Color::White;
+const COLOR_BG: Color = Color::Black;
 
 pub fn draw_frame(f: &mut Frame, app_state: &AppState) {
     match app_state {
@@ -57,7 +63,8 @@ pub fn draw_frame(f: &mut Frame, app_state: &AppState) {
             "AWAITING SIGNATURE",
             "Please review and confirm details on your wallet device.",
         ),
-        AppState::Display { content } => draw_content_display(f, " ADDRESS ", content),
+        AppState::DisplayAddress { addr } => draw_addr(f, addr),
+        AppState::DisplaySignature { sig } => draw_signature(f, sig),
         AppState::Wipe => draw_confirmation(
             f,
             "SYSTEM WIPE",
@@ -115,6 +122,113 @@ fn draw_centered_message(f: &mut Frame, title: &str, msg: &str) {
         .wrap(Wrap { trim: true });
 
     f.render_widget(text, vertical_center[1]);
+}
+
+fn draw_addr(f: &mut Frame, addr: &str) {
+    // Generate QR Code
+    let code = match QrCode::new(addr.as_bytes()) {
+        Ok(c) => c,
+        Err(_) => {
+            draw_error_popup(f, "Failed to generate QR code");
+            return;
+        }
+    };
+
+    let qr_width = code.width();
+
+    // Setup Layout
+    // We want the QR code to be roughly square visually.
+    // Since we use HalfBlock (2 pixels per char height), we need:
+    // Width = qr_width characters
+    // Height = qr_width / 2 characters
+    let display_width = (qr_width + 4) as u16; // +4 for padding
+    let display_height = (qr_width / 2 + 6) as u16; // +6 for padding & text
+
+    let area = centered_rect_fixed(f.area(), display_width, display_height);
+
+    let block = Block::bordered()
+        .title(" RECEIVE ADDRESS ")
+        .border_style(Style::default().fg(COLOR_SECONDARY));
+
+    f.render_widget(block.clone(), area);
+
+    // Split: Top (QR), Bottom (Text)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Min(0),    // Fills remaining space (QR Code)
+            Constraint::Length(1), // Address text
+            Constraint::Length(1), // Help text
+        ])
+        .split(block.inner(area));
+
+    // Draw QR Code using Canvas
+    let canvas = Canvas::default()
+        .x_bounds([0.0, qr_width as f64])
+        .y_bounds([0.0, qr_width as f64])
+        .marker(Marker::HalfBlock) // <--- Makes pixels look square
+        .paint(|ctx| {
+            for x in 0..qr_width {
+                for y in 0..qr_width {
+                    // QR codes are top-down, Canvas is bottom-up.
+                    // We simply check the color at (x, y).
+                    let color = if code[(x, y)] == qrcode::Color::Dark {
+                        COLOR_BG
+                    } else {
+                        COLOR_TEXT
+                    };
+                    ctx.draw(&Rectangle {
+                        x: x as f64,
+                        y: (qr_width - 1 - y) as f64, // Flip Y axis
+                        width: 1.0,
+                        height: 1.0,
+                        color,
+                    });
+                }
+            }
+        });
+
+    // Center the QR canvas horizontally in the chunk
+    // We manually center it because Canvas stretches to fill.
+    // Since we calculated exact area size above, we can just render full width.
+    f.render_widget(canvas, chunks[0]);
+
+    // Draw Address Text
+    let text = Paragraph::new(addr)
+        .style(Style::default().fg(COLOR_SECONDARY))
+        .alignment(Alignment::Center);
+    f.render_widget(text, chunks[1]);
+
+    // Draw Help
+    let help = Paragraph::new("Press [ESC] to return")
+        .style(Style::default().fg(COLOR_INACTIVE))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[2]);
+}
+
+/// Helper to create a fixed-size centered rect
+fn centered_rect_fixed(r: Rect, width: u16, height: u16) -> Rect {
+    let vertical_pad = r.height.saturating_sub(height) / 2;
+    let horizontal_pad = r.width.saturating_sub(width) / 2;
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(vertical_pad),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(horizontal_pad),
+            Constraint::Length(width),
+            Constraint::Min(0),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// Helper to draw a menu list
@@ -433,10 +547,10 @@ fn draw_sign_form(f: &mut Frame, form: &SignForm) {
 }
 
 /// Draw generic content display
-fn draw_content_display(f: &mut Frame, title: &str, content: &str) {
+fn draw_signature(f: &mut Frame, content: &str) {
     let area = centered_rect(f.area(), 80, 60);
     let block = Block::default()
-        .title(title)
+        .title(" SIGNATURE ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
 

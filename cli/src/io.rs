@@ -72,12 +72,17 @@ fn try_connect() -> (Option<SerialTransport>, AppState) {
     // list all available ports
     let ports = serialport::available_ports().unwrap_or_default();
 
+    const VID_ESPRESSIF: u16 = 0x303A;
+    const VID_SILICON_LABS: u16 = 0x10C4; // for CP210x
+    const VID_WCH: u16 = 0x1A86; // for CH340
+
     for p in ports {
         // filter for Espressif VID (0x303A)
-        if !matches!(
-            p.port_type,
-            SerialPortType::UsbPort(UsbPortInfo { vid: 0x303A, .. })
-        ) {
+        if let SerialPortType::UsbPort(UsbPortInfo { vid, .. }) = p.port_type {
+            if vid != VID_ESPRESSIF && vid != VID_SILICON_LABS && vid != VID_WCH {
+                continue;
+            }
+        } else {
             continue;
         }
 

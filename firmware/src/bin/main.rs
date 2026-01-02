@@ -9,7 +9,7 @@
 use alloc::format;
 
 use common::{Command, Response, Transport, WalletStatus, error::WalletError};
-use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::{draw_target::DrawTarget, pixelcolor::Rgb565, prelude::RgbColor};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     clock::CpuClock,
@@ -103,15 +103,19 @@ fn main() -> ! {
 
     let di = SpiInterface::new(spi_device, dc, &mut spi_buffer);
     let mut display = Builder::new(models::ST7735s, di)
-        .orientation(
-            Orientation::new()
-                .rotate(Rotation::Deg270)
-                .flip_horizontal(),
-        )
+        // .orientation(
+        //     Orientation::new()
+        //         .rotate(Rotation::Deg270)
+        //         .flip_horizontal(),
+        // )
+        .display_size(80, 160)
+        .display_offset(26, 1)
         .color_order(ColorOrder::Bgr)
         .reset_pin(rst)
         .init(&mut delay)
         .unwrap();
+
+    display.clear(Rgb565::RED);
 
     loop {
         // detect button pressed or not

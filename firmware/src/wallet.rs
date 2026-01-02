@@ -317,7 +317,7 @@ impl<'a> Wallet<'a> {
             tx_context: None,
         });
 
-        Ok(Response::Signature(signature.into()))
+        Ok(Response::Signature(signature))
     }
 
     pub fn receive(&mut self) -> Result<Response, WalletError> {

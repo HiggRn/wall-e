@@ -103,9 +103,13 @@ pub enum AppState {
     },
     /// confirm transaction on the wallet
     TxConfirm,
-    /// display content
-    Display {
-        content: String,
+    /// display address
+    DisplayAddress {
+        addr: String,
+    },
+    /// display signature
+    DisplaySignature {
+        sig: String,
     },
     /// ask for confirmation to wipe wallet
     Wipe,
@@ -225,8 +229,8 @@ impl App {
 
             // --- Unlocked Operations ---
             (AppState::Unlocked, Response::Address(addr)) => {
-                self.app_state = AppState::Display {
-                    content: addr.to_string(),
+                self.app_state = AppState::DisplayAddress {
+                    addr: addr.to_string(),
                 };
             }
             (AppState::Wipe, Response::Done) => {
@@ -234,9 +238,9 @@ impl App {
             }
 
             // --- Signing ---
-            (AppState::Sign { .. }, Response::Signature(signature)) => {
-                self.app_state = AppState::Display {
-                    content: format!("Signature: {}", signature),
+            (AppState::TxConfirm, Response::Signature(signature)) => {
+                self.app_state = AppState::DisplaySignature {
+                    sig: signature.to_string(),
                 };
             }
 
@@ -433,9 +437,16 @@ impl App {
                 }
             }
 
-            AppState::Display { .. } => match key.code {
+            AppState::DisplayAddress { .. } => match key.code {
                 KeyCode::Esc => {
                     let _ = self.io_tx.send(IoAction::Send(Command::Cancel));
+                    self.app_state = AppState::Unlocked;
+                }
+                _ => {}
+            },
+
+            AppState::DisplaySignature { .. } => match key.code {
+                KeyCode::Esc => {
                     self.app_state = AppState::Unlocked;
                 }
                 _ => {}

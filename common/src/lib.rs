@@ -2,8 +2,8 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-use heapless::{String as HString, format};
+use alloc::{format, string::ToString, vec::Vec};
+use heapless::String as HString;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{TransportError, WalletError};
@@ -27,9 +27,6 @@ pub const ADDR_LEN: usize = 20;
 
 /// The length of address length (in string, with `0x`)
 pub const ADDR_STR_LEN: usize = ADDR_LEN * 2 + 2;
-
-/// The length of signature
-pub const SIGNATURE_LEN: usize = 132;
 
 pub const MAX_WRONG_PIN_COUNT: u8 = 10;
 
@@ -91,7 +88,7 @@ pub enum Response {
     /// Reply wallet status
     Status(WalletStatus),
     /// Transaction signature
-    Signature(HString<SIGNATURE_LEN>),
+    Signature(Signature),
     /// Address for receiving
     Address(HString<ADDR_STR_LEN>),
     /// Error
@@ -119,11 +116,14 @@ pub struct Signature {
     pub v: u8, // y_parity (0 or 1 for EIP-1559)
 }
 
-impl Into<HString<SIGNATURE_LEN>> for Signature {
-    fn into(self) -> HString<SIGNATURE_LEN> {
-        // There shall be no error here
-        format!(SIGNATURE_LEN; "0x{}{}{:02x}", hex::encode(self.r), hex::encode(self.s), self.v)
-            .unwrap()
+impl ToString for Signature {
+    fn to_string(&self) -> alloc::string::String {
+        format!(
+            "0x{}{}{:02x}",
+            hex::encode(self.r),
+            hex::encode(self.s),
+            self.v
+        )
     }
 }
 
